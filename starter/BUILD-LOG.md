@@ -46,10 +46,11 @@ I also had to handle deny precedence carefully: an explicit deny wins even if th
 
 After implementing dynamic resolution, `check-permissions.js` passed 35/35 and `npm run personalisation` passed 18/18, including the undocumented `reviewer` role and `device:reboot` permission. This confirmed that the engine is reading roles and permissions from the database instead of hard-coding the documented matrix.
 
-## Phase 3 — orgs, members, invites
+## Phase 3 — API setup and baseline
 
-_Anything you had to work out that no document states. Invite lifecycle states are a common
-source of this._
+While running the API suite on Windows, `scripts/load-db.js` failed because `new URL(...).pathname` produced an invalid Windows filesystem path. I replaced it with `fileURLToPath(...)`, after which the database loaded correctly.
+
+After fixing the loader, I ran `node scripts/check-api.js`. The suite now reaches the API layer, but the first login request returns `404`, which confirms the API routes are still unimplemented and are the next phase of work.
 
 ## Phase 4 — devices and grants
 

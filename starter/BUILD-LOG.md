@@ -38,8 +38,13 @@ One detail I had to be careful about was `exp <= now`: a token expiring exactly 
 
 ## Phase 2 — caller context and the resolution engine
 
-_This is where most people's first model is wrong. Write down the model you started with, the
-observation that broke it, and the model you moved to. Be specific about the observation._
+Implemented `context.js` to verify the bearer token, load the user's membership, enforce org isolation, and reject stale permission versions.
+
+For the permission engine, I first thought role permissions alone would be enough, but the tests showed that grants can override the role differently per device. I changed the model to resolve permissions from the database using the role baseline plus active grants.
+
+I also had to handle deny precedence carefully: an explicit deny wins even if there is another allow at a narrower device scope.
+
+After implementing dynamic resolution, `check-permissions.js` passed 35/35 and `npm run personalisation` passed 18/18, including the undocumented `reviewer` role and `device:reboot` permission. This confirmed that the engine is reading roles and permissions from the database instead of hard-coding the documented matrix.
 
 ## Phase 3 — orgs, members, invites
 

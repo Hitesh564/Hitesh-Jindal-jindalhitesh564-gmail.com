@@ -71,12 +71,109 @@ export function issueAccessToken({ userId, orgId, role, permVersion }, secret) {
 // `node scripts/check-jwt.js` is the public test suite for this function.
 // ---------------------------------------------------------------------------
 export function verifyAccessToken(token, secret) {
-  // YOURS TO WRITE. Every failure mode listed above must be a 401 UNAUTHENTICATED.
-  // `node scripts/check-jwt.js` is the public suite for this function.
-  throw Object.assign(
-    new Error('TODO: server/auth.js — verifyAccessToken() is yours to write (AUTH-DATA-MODEL.md §10).'),
-    { code: 'NOT_IMPLEMENTED' }
-  );
+  try {
+    // 1. Token must be a string with exactly 3 JWT segments
+    if (typeof token !== 'string' || !token) {
+      throw unauthenticated('invalid access token');
+    }
+
+    const parts = token.split('.');
+    if (parts.length !== 3) {
+      throw unauthenticated('invalid access token');
+    }
+
+    const [headerPart, payloadPart, signaturePart] = parts;
+
+    if (!headerPart || !payloadPart || !signaturePart) {
+      throw unauthenticated('invalid access token');
+    }
+
+    // 2. Decode and parse header + payload
+    let header;
+    let claims;
+
+    try {
+      header = JSON.parse(unb64(headerPart).toString('utf8'));
+      claims = JSON.parse(unb64(payloadPart).toString('utf8'));
+    } catch {
+      throw unauthenticated('invalid access token');
+    }
+
+    // Header must be an object, not null/array/etc.
+    if (
+      !header ||
+      typeof header !== 'object' ||
+      Array.isArray(header)
+    ) {
+      throw unauthenticated('invalid access token');
+    }
+
+    if (
+      !claims ||
+      typeof claims !== 'object' ||
+      Array.isArray(claims)
+    ) {
+      throw unauthenticated('invalid access token');
+    }
+
+    // 3. Pin algorithm and type
+    if (header.alg !== ALG || header.typ !== 'JWT') {
+      throw unauthenticated('invalid access token');
+    }
+
+    // 4. Verify signature
+    let providedSignature;
+
+    try {
+      providedSignature = unb64(signaturePart);
+    } catch {
+      throw unauthenticated('invalid access token');
+    }
+
+    const expectedSignature = createHmac('sha256', secret)
+      .update(`${headerPart}.${payloadPart}`)
+      .digest();
+
+    if (
+      providedSignature.length !== expectedSignature.length ||
+      !timingSafeEqual(providedSignature, expectedSignature)
+    ) {
+      throw unauthenticated('invalid access token');
+    }
+
+    // 5. Expiry
+    const now = Math.floor(Date.now() / 1000);
+
+    if (
+      typeof claims.exp !== 'number' ||
+      !Number.isFinite(claims.exp) ||
+      claims.exp <= now
+    ) {
+      throw unauthenticated('access token expired');
+    }
+
+    // 6. Issuer + audience
+    if (claims.iss !== ISS || claims.aud !== AUD) {
+      throw unauthenticated('invalid access token');
+    }
+
+    // 7. jti must exist and be non-empty
+    if (
+      typeof claims.jti !== 'string' ||
+      claims.jti.trim() === ''
+    ) {
+      throw unauthenticated('invalid access token');
+    }
+
+    return claims;
+  } catch (err) {
+    // If it's already one of our HTTP/auth errors, preserve it.
+    if (err?.code === 'UNAUTHENTICATED') {
+      throw err;
+    }
+
+    throw unauthenticated('invalid access token');
+  }
 }
 
 

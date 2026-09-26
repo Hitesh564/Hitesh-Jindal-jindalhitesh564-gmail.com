@@ -31,8 +31,10 @@ What did the starting line actually look like, and which failure surprised you?_
 
 ## Phase 1 — token verification
 
-_What did you expect each failure mode to look like before you ran it? Which one behaved
-differently from your expectation, and what did that tell you?_
+Implemented `verifyAccessToken` and ran `node scripts/check-jwt.js`.
+The first run had 43 failures because the function was still a stub.
+After adding segment validation, JSON decoding, algorithm/type checks, constant-time signature verification, expiry, issuer/audience and jti checks, the suite passed 43/43.
+One detail I had to be careful about was `exp <= now`: a token expiring exactly now is already expired.
 
 ## Phase 2 — caller context and the resolution engine
 

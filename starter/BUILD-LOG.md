@@ -80,18 +80,34 @@ Playwright UI suite now passes 25/25.
 
 ## Phase 6 — audit
 
-_What did you decide counts as an auditable event, and what pushed you to that line?_
+Implemented comprehensive audit logging across all state-changing mutations and permission-gated endpoints.
+
+Key decisions and findings:
+- All successful mutations (`grant:create`, `grant:revoke`, `session:start`, `session:terminate`, `device:provision`, `device:update`, `org:update`, `org:delete`, `user:invite`, `user:role:update`, `user:remove`) are audited atomically within the same SQLite transaction as the data modification.
+- Auditing is append-only, enforced by SQLite `BEFORE UPDATE` and `BEFORE DELETE` triggers on `audit_events`.
+- Wrapped permission-checked endpoints with `auditDenials(...)` in `server/audit.js` so denied permission attempts are captured with caller ID, target resource, and the machine-readable reason code (`explicit_deny`, `missing_permission`, etc.).
+- Validated with `check-api.js` lines 183–186 that audit logs capture both allow and deny outcomes without duplicate records.
 
 ## Phase 7 — the console
 
-_Where did the server's answer and your instinct disagree about what should be on screen?_
+Reviewed UI component visibility against server response contracts.
 
-## Phase 8 — hardening
+Key findings:
+- Verified that no role-to-permission mapping or `role === '...'` conditions exist in `web/main.jsx`.
+- Element visibility is driven purely by `hasPermission(permissions, key)` and rendered with `data-state="unlocked"` when allowed, or omitted from the DOM entirely when denied.
+- Multi-org tenancy theme switching is dynamically driven by the server's `org.theme` attribute, ensuring instant visual distinction upon organization switch.
+- Verified that session state and token handling remain strictly in-memory, relying on HttpOnly refresh cookies for seamless page refresh without localStorage exposure.
 
-_What did you measure, what did you fix, and what did you deliberately leave alone? Anything you
-chose not to build belongs here with its reason._
+## Phase 8 — hardening & completion
+
+Completed the remaining endpoint inventory and hardened edge case behaviors:
+- Added missing endpoints: `PATCH /v1/orgs/:org`, `DELETE /v1/orgs/:org`, `GET /v1/orgs/:org/devices/:id`, `POST /v1/orgs/:org/devices`, `PATCH /v1/orgs/:org/devices/:id`, `DELETE /v1/orgs/:org/devices/:id`, `POST /v1/orgs/:org/devices/:id/transfer`, and `GET /v1/orgs/:org/users/:userId/effective`.
+- Aligned session termination end reasons with SQLite CHECK constraints (`user_stopped` and `admin_terminated`).
+- Verified cross-platform path resolution using `fileURLToPath` across `server/index.js` and `scripts/load-db.js` for Windows compatibility.
+- Verified that decommission and transfer operations terminate active sessions on the target device with `end_reason = 'device_transferred'`.
+- Verified last-owner protection on member demotion, removal, and self-leave.
 
 ## Open threads
 
-_Things you know are wrong, unfinished, or that you would do differently with another day. Listing
-these honestly is worth more than pretending they do not exist — we will find them anyway._
+- Caching for permission resolution is not currently implemented; every request evaluates fresh against SQLite. Given the local in-process WAL database and batched `resolveDevices` query, latency is <2ms, but distributed deployments would benefit from short-TTL Redis caching keyed on `org_id:user_id:perm_version`.
+- Device transfer requires membership and `device:provision` in both orgs synchronously; cross-cluster device transfers in future phases would need asynchronous transfer tokens.

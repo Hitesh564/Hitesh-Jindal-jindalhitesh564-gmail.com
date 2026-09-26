@@ -28,6 +28,11 @@ import {
 } from '../lifecycle.js';
 
 
+import {
+  audit,
+  auditDenials,
+} from '../audit.js';
+
 const INVITE_TTL_MS =
   7 * 24 * 60 * 60 * 1000;
 
@@ -38,43 +43,52 @@ const INVITE_TTL_MS =
 
 function createInvite({ db }) {
   return async function handler(ctx, params, res) {
-    assertCan(db, ctx, 'user:invite');
+    return auditDenials(
+      db,
+      ctx,
+      {
+        action: 'user:invite',
+        targetType: 'invite',
+        targetId: null,
+      },
+      () => {
+        assertCan(db, ctx, 'user:invite');
 
-    const email =
-      typeof ctx.body.email === 'string'
-        ? ctx.body.email.trim().toLowerCase()
-        : '';
+        const email =
+          typeof ctx.body.email === 'string'
+            ? ctx.body.email.trim().toLowerCase()
+            : '';
 
-    const role =
-      typeof ctx.body.role === 'string'
-        ? ctx.body.role
-        : '';
-
-
-    if (!email) {
-      throw badRequest('email is required');
-    }
-
-    assertRoleExists(db, role);
+        const role =
+          typeof ctx.body.role === 'string'
+            ? ctx.body.role
+            : '';
 
 
-    // Role assignment authority.
-    const ranks = roleRanks(db);
+        if (!email) {
+          throw badRequest('email is required');
+        }
 
-    if (role === 'owner' && ctx.role !== 'owner') {
-      throw forbidden(
-        'only an owner may assign owner'
-      );
-    }
+        assertRoleExists(db, role);
 
-    if (
-      ctx.role !== 'owner' &&
-      ranks[role] >= ranks[ctx.role]
-    ) {
-      throw forbidden(
-        'cannot assign this role'
-      );
-    }
+
+        // Role assignment authority.
+        const ranks = roleRanks(db);
+
+        if (role === 'owner' && ctx.role !== 'owner') {
+          throw forbidden(
+            'only an owner may assign owner'
+          );
+        }
+
+        if (
+          ctx.role !== 'owner' &&
+          ranks[role] >= ranks[ctx.role]
+        ) {
+          throw forbidden(
+            'cannot assign this role'
+          );
+        }
 
 
     const existingUser = db.prepare(`
@@ -137,37 +151,53 @@ function createInvite({ db }) {
     ).toISOString();
 
 
-    db.prepare(`
-      INSERT INTO invites (
+    const tx = db.transaction(() => {
+      db.prepare(`
+        INSERT INTO invites (
+          id,
+          org_id,
+          email,
+          role,
+          token_hash,
+          invited_by,
+          expires_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+      `).run(
         id,
-        org_id,
+        ctx.orgId,
         email,
         role,
-        token_hash,
-        invited_by,
-        expires_at
-      )
-      VALUES (?, ?, ?, ?, ?, ?, ?)
-    `).run(
-      id,
-      ctx.orgId,
-      email,
-      role,
-      hashInviteToken(rawToken),
-      ctx.userId,
-      expiresAt
-    );
+        hashInviteToken(rawToken),
+        ctx.userId,
+        expiresAt
+      );
 
-
-    send(res, 201, {
-      id,
-      email,
-      role,
-      expiresAt,
-
-      // Raw bearer credential returned once.
-      inviteToken: rawToken,
+      audit(db, {
+        orgId: ctx.orgId,
+        actorId: ctx.userId,
+        action: 'user:invite',
+        targetType: 'invite',
+        targetId: id,
+        result: 'allow',
+        reasonCode: role,
+        requestId: ctx.requestId,
+      });
     });
+
+    tx();
+
+        send(res, 201, {
+          id,
+          email,
+          role,
+          expiresAt,
+
+          // Raw bearer credential returned once.
+          inviteToken: rawToken,
+        });
+      }
+    );
   };
 }
 
@@ -507,40 +537,64 @@ function listInvites({ db }) {
 
 function revokeInvite({ db }) {
   return async function handler(ctx, params, res) {
-    assertCan(db, ctx, 'user:invite');
+    return auditDenials(
+      db,
+      ctx,
+      {
+        action: 'user:invite',
+        targetType: 'invite',
+        targetId: params.id,
+      },
+      () => {
+        assertCan(db, ctx, 'user:invite');
 
-    const invite = db.prepare(`
-      SELECT id
-      FROM invites
-      WHERE id = ?
-        AND org_id = ?
-        AND accepted_at IS NULL
-        AND revoked_at IS NULL
-      LIMIT 1
-    `).get(
-      params.id,
-      ctx.orgId
+        const invite = db.prepare(`
+          SELECT id
+          FROM invites
+          WHERE id = ?
+            AND org_id = ?
+            AND accepted_at IS NULL
+            AND revoked_at IS NULL
+          LIMIT 1
+        `).get(
+          params.id,
+          ctx.orgId
+        );
+
+        if (!invite) {
+          throw notFound();
+        }
+
+        const tx = db.transaction(() => {
+          db.prepare(`
+            UPDATE invites
+            SET revoked_at = ?
+            WHERE id = ?
+          `).run(
+            new Date().toISOString(),
+            invite.id
+          );
+
+          audit(db, {
+            orgId: ctx.orgId,
+            actorId: ctx.userId,
+            action: 'user:invite',
+            targetType: 'invite',
+            targetId: invite.id,
+            result: 'allow',
+            reasonCode: 'revoked',
+            requestId: ctx.requestId,
+          });
+        });
+
+        tx();
+
+        send(res, 200, {
+          id: invite.id,
+          revoked: true,
+        });
+      }
     );
-
-    if (!invite) {
-      throw notFound();
-    }
-
-
-    db.prepare(`
-      UPDATE invites
-      SET revoked_at = ?
-      WHERE id = ?
-    `).run(
-      new Date().toISOString(),
-      invite.id
-    );
-
-
-    send(res, 200, {
-      id: invite.id,
-      revoked: true,
-    });
   };
 }
 

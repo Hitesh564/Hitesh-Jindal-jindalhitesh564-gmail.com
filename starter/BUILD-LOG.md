@@ -52,15 +52,31 @@ While running the API suite on Windows, `scripts/load-db.js` failed because `new
 
 After fixing the loader, I ran `node scripts/check-api.js`. The suite now reaches the API layer, but the first login request returns `404`, which confirms the API routes are still unimplemented and are the next phase of work.
 
-## Phase 4 — devices and grants
+## Phase 4 — API implementation
 
-_What happens at the boundary where two grants disagree, or where a grant's scope and the
-question's scope differ? Say what you predicted and what you got._
+Implemented the main HTTP API for authentication, organization switching, device listing, sessions, member lifecycle, grants, invites, and audit access.
 
-## Phase 5 — sessions
+A few important behaviours were validated while building this:
+- role changes bump `perm_version`, so old access tokens become stale on the next request
+- existing sessions survive role/permission changes, but suspension ends them
+- device visibility is controlled by `device:view`, so denied devices disappear rather than being redacted
+- grant validation rejects unknown permission strings, empty permission lists, and self-grants
+- invite tokens are hashed at rest, returned once, and cannot be reused
 
-_Two permissions, one device. What did you have to resolve, and in what order, to keep the two
-failure reasons distinguishable?_
+After implementing these routes, `node scripts/check-api.js` passed 66/66.
+
+## Phase 5 — permission-driven React console
+
+Implemented the React console using server-resolved permissions only, with no frontend role matrix.
+
+Added login, organization switching, permission-gated navigation, per-device controls, grants, sessions, audit, admin views, organization creation and invite redemption.
+
+Implemented in-memory access tokens with HttpOnly refresh-cookie session restoration.
+
+Also fixed Windows production static-file resolution using fileURLToPath.
+
+Playwright UI suite now passes 25/25.
+
 
 ## Phase 6 — audit
 

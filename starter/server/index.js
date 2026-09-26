@@ -9,6 +9,7 @@
 import http from 'node:http';
 import { readFile, stat } from 'node:fs/promises';
 import { extname, join, normalize } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import { createRouter } from './router.js';
 import { openDatabase } from './db.js';
@@ -19,11 +20,19 @@ import { registerRoutes } from './routes/index.js';
 const DEV = process.env.NODE_ENV !== 'production';
 const PORT = Number(process.env.PORT ?? 8080);
 const SECRET = process.env.JWT_SECRET ?? 'dev-secret-change-me';
-const DIST = new URL('../dist/', import.meta.url).pathname;
+
+// Windows-safe conversion from file URL to filesystem path
+const DIST = fileURLToPath(
+  new URL('../dist/', import.meta.url)
+);
 
 const db = openDatabase();
 const router = createRouter();
-registerRoutes(router, { db, secret: SECRET });
+
+registerRoutes(router, {
+  db,
+  secret: SECRET,
+});
 
 // Routes reachable without a token. Everything else requires a valid JWT.
 const PUBLIC_ROUTES = new Set([
@@ -34,35 +43,74 @@ const PUBLIC_ROUTES = new Set([
 ]);
 
 // ---------------------------------------------------------------------------
-// The request pipeline. Read this top to bottom and you know how the app works.
+// The request pipeline
 // ---------------------------------------------------------------------------
+
 async function handleApi(req, res, url) {
   const requestId = `req_${crypto.randomUUID().slice(0, 8)}`;
 
   try {
-    const hit = router.match(req.method, url.pathname);
-    if (!hit) throw notFound();
+    const hit = router.match(
+      req.method,
+      url.pathname
+    );
 
-    const ctx = { db, secret: SECRET, requestId, query: url.searchParams, body: {}, req };
+    if (!hit) {
+      throw notFound();
+    }
 
-    const key = `${req.method} ${hit.pattern}`;
+    const ctx = {
+      db,
+      secret: SECRET,
+      requestId,
+      query: url.searchParams,
+      body: {},
+      req,
+    };
+
+    const key =
+      `${req.method} ${hit.pattern}`;
+
     if (!PUBLIC_ROUTES.has(key)) {
-      Object.assign(ctx, authenticate(db, SECRET)(req, hit.params));
+      Object.assign(
+        ctx,
+        authenticate(
+          db,
+          SECRET
+        )(
+          req,
+          hit.params
+        )
+      );
     }
 
-    if (req.method !== 'GET' && req.method !== 'DELETE') {
-      ctx.body = await readJson(req);
+    if (
+      req.method !== 'GET' &&
+      req.method !== 'DELETE'
+    ) {
+      ctx.body =
+        await readJson(req);
     }
 
-    await hit.handler(ctx, hit.params, res);
+    await hit.handler(
+      ctx,
+      hit.params,
+      res
+    );
+
   } catch (err) {
-    sendError(res, err, requestId);
+    sendError(
+      res,
+      err,
+      requestId
+    );
   }
 }
 
 // ---------------------------------------------------------------------------
-// Production static files. ~25 lines, no dependency, no surprises.
+// Production static files
 // ---------------------------------------------------------------------------
+
 const MIME = {
   '.html': 'text/html; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
@@ -76,58 +124,165 @@ const MIME = {
 
 async function serveStatic(req, res, url) {
   // normalize() collapses '..' so a crafted path cannot escape dist/.
-  const rel = normalize(decodeURIComponent(url.pathname)).replace(/^(\.\.[/\\])+/, '');
-  let file = join(DIST, rel);
+  const rel = normalize(
+    decodeURIComponent(url.pathname)
+  ).replace(
+    /^(\.\.[/\\])+/,
+    ''
+  );
+
+  let file = join(
+    DIST,
+    rel
+  );
 
   try {
-    const info = await stat(file);
-    if (info.isDirectory()) file = join(file, 'index.html');
+    const info =
+      await stat(file);
+
+    if (info.isDirectory()) {
+      file = join(
+        file,
+        'index.html'
+      );
+    }
+
   } catch {
-    file = join(DIST, 'index.html'); // SPA fallback: let the client router handle it
+    // SPA fallback: let React handle client-side routes like /invite/:token
+    file = join(
+      DIST,
+      'index.html'
+    );
   }
 
   try {
-    const body = await readFile(file);
-    res.writeHead(200, {
-      'content-type': MIME[extname(file)] ?? 'application/octet-stream',
-      'content-length': body.length,
-    });
+    const body =
+      await readFile(file);
+
+    res.writeHead(
+      200,
+      {
+        'content-type':
+          MIME[extname(file)] ??
+          'application/octet-stream',
+
+        'content-length':
+          body.length,
+      }
+    );
+
     res.end(body);
+
   } catch {
-    send(res, 404, { error: { code: 'NOT_FOUND', message: 'not found', reason: null, requestId: null } });
+    send(
+      res,
+      404,
+      {
+        error: {
+          code: 'NOT_FOUND',
+          message: 'not found',
+          reason: null,
+          requestId: null,
+        },
+      }
+    );
   }
 }
 
 // ---------------------------------------------------------------------------
 // Boot
 // ---------------------------------------------------------------------------
+
 let vite = null;
+
 if (DEV) {
-  const { createServer } = await import('vite');
-  vite = await createServer({ server: { middlewareMode: true }, appType: 'spa' });
-  console.log('vite middleware attached (HMR enabled)');
+  const {
+    createServer,
+  } = await import('vite');
+
+  vite = await createServer({
+    server: {
+      middlewareMode: true,
+    },
+    appType: 'spa',
+  });
+
+  console.log(
+    'vite middleware attached (HMR enabled)'
+  );
 }
 
-const server = http.createServer((req, res) => {
-  const url = new URL(req.url, `http://${req.headers.host}`);
+const server =
+  http.createServer(
+    (req, res) => {
+      const url =
+        new URL(
+          req.url,
+          `http://${req.headers.host}`
+        );
 
-  if (url.pathname === '/v1' || url.pathname.startsWith('/v1/')) {
-    return handleApi(req, res, url);
+      if (
+        url.pathname === '/v1' ||
+        url.pathname.startsWith('/v1/')
+      ) {
+        return handleApi(
+          req,
+          res,
+          url
+        );
+      }
+
+      if (vite) {
+        return vite.middlewares(
+          req,
+          res,
+          () =>
+            send(
+              res,
+              404,
+              {
+                error: {
+                  code: 'NOT_FOUND',
+                },
+              }
+            )
+        );
+      }
+
+      return serveStatic(
+        req,
+        res,
+        url
+      );
+    }
+  );
+
+server.listen(
+  PORT,
+  () => {
+    console.log(
+      `RemoteOps on http://localhost:${PORT}  (${DEV ? 'development' : 'production'})`
+    );
   }
+);
 
-  if (vite) return vite.middlewares(req, res, () => send(res, 404, { error: { code: 'NOT_FOUND' } }));
-  return serveStatic(req, res, url);
-});
+// ---------------------------------------------------------------------------
+// Graceful shutdown
+// ---------------------------------------------------------------------------
 
-server.listen(PORT, () => {
-  console.log(`RemoteOps on http://localhost:${PORT}  (${DEV ? 'development' : 'production'})`);
-});
-
-for (const signal of ['SIGINT', 'SIGTERM']) {
-  process.on(signal, () => {
-    server.close(() => {
-      db.close();
-      process.exit(0);
-    });
-  });
+for (
+  const signal of [
+    'SIGINT',
+    'SIGTERM',
+  ]
+) {
+  process.on(
+    signal,
+    () => {
+      server.close(() => {
+        db.close();
+        process.exit(0);
+      });
+    }
+  );
 }
